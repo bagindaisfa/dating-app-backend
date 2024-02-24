@@ -49,9 +49,9 @@ npx ts-node app.ts
 The service will be available at http://localhost:3000.
 
 # API Endpoints
-Login: POST /api/login
-Signup: POST /api/signup
-Get Profile: GET /api/profile
-Left Swipe: POST /api/swipe/left
-Right Swipe: POST /api/swipe/right
-Update User Type: PUT /api/user
+1. Login: POST /api/login
+2. Signup: POST /api/signup
+3. Get Profile: GET /api/profile
+4. Left Swipe: POST /api/swipe/left
+5. Right Swipe: POST /api/swipe/right
+6. Update User Type: PUT /api/user
