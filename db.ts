@@ -4,8 +4,8 @@ const createDatabaseConnection = () => {
   return new Promise<mysql.Pool>((resolve, reject) => {
     const connection = mysql.createPool({
       host: 'localhost',
-      user: 'admin_rp',
-      password: 'B@judit0k02018',
+      user: 'admin',
+      password: 'passwordd',
       database: 'dating_app',
       connectTimeout: 20000,
     });
