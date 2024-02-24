@@ -50,24 +50,48 @@ const verifyToken = (req: Request, res: Response, next: NextFunction) => {
 // Middleware to check daily limit and prevent repeated profiles
 const checkDailyLimit = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const { user_id } = req.params; // Assuming user information is attached to the request
+        const { user_id } = req.query; // Assuming user information is attached to the request
         
         // Logic to check daily limit
-        const checkUserType = await dbConnection.query('SELECT * FROM users WHERE user_id = $1', [user_id]);
-        if (checkUserType.rows[0].type === 'premium') {
-          next(); // Continue to the next middleware or route handler
-          return;
-        } else {
-            const todaySwipeCountResult = await dbConnection.query('SELECT COUNT(*) FROM swipe_history WHERE user_id = $1 AND swipe_date = CURRENT_DATE', [user_id]);
-            const todaySwipeCount = parseInt(todaySwipeCountResult.rows[0].count, 10);
-        
-            if (todaySwipeCount >= 10) {
-              return res.status(403).json({ message: 'Daily swipe limit exceeded' });
+        await dbConnection.query(`SELECT * FROM users WHERE id = ${user_id}`, async (err:any, results:any) => {
+            if (err) {
+              console.error("Error fetching user:", err);
+              res.status(500).json({ error: "Internal server error" });
+              return;
             }
-        
-            next(); // Continue to the next middleware or route handler
-        }
-        
+    
+            if (results.length === 0) {
+                res.status(404).json({ error: "user not found" });
+                return;
+            } else {
+                if (results[0].type === 'premium') {
+                    next(); // Continue to the next middleware or route handler
+                    return;
+                } else {
+                    await dbConnection.query(`SELECT COUNT(*) AS count FROM swipe_history WHERE user_id = ${user_id} AND swipe_date = CURRENT_DATE()`, (err:any, results:any) => {
+                        if (err) {
+                          console.error("Error fetching history:", err);
+                          res.status(500).json({ error: "Internal server error" });
+                          return;
+                        }
+                
+                        if (results.length === 0) {
+                            res.status(404).json({ error: "history not found" });
+                            return;
+                        } else {
+                            const todaySwipeCountResult = results[0];
+                            const todaySwipeCount = parseInt(todaySwipeCountResult.count, 10);
+                        
+                            if (todaySwipeCount >= 10) {
+                                return res.status(403).json({ message: 'Daily swipe limit exceeded' });
+                            }
+                        
+                            next(); // Continue to the next middleware or route handler
+                        }
+                    });   
+                }
+            }
+          });
       } catch (error) {
         console.error('Error in checkDailyLimit middleware:', error);
         res.status(500).json({ error: 'Internal Server Error' });
@@ -107,7 +131,7 @@ app.post('/api/login', async (req: Request, res: Response) => {
     
 });
 
-app.post("/api/signup", verifyToken, async (req: Request, res: Response) => {
+app.post("/api/signup", async (req: Request, res: Response) => {
     const { username, display_name, gender, password } = req.body;
     const encryptedText = encrypt(password, TZ_JWT_SECRET_KEY);
 
@@ -134,13 +158,26 @@ app.post("/api/signup", verifyToken, async (req: Request, res: Response) => {
 });
 
 // API endpoint to get a profile
-app.get('/profile/:userId', checkDailyLimit, async (req: Request, res: Response) => {
-    const { user_id } = req.params;
+app.get('/api/profile', verifyToken, checkDailyLimit, async (req: Request, res: Response) => {
+    const { user_id } = req.query;
+    
     try {
       // Logic to get a profile from the database
-      const result = await dbConnection.query(`SELECT * FROM profiles WHERE id NOT IN (SELECT profile_id FROM swipe_history WHERE user_id= ${user_id}) ORDER BY RANDOM() LIMIT 1`);
-      const profile = result.rows[0];
-      res.json({ profile });
+      await dbConnection.query(`SELECT * FROM profiles WHERE id NOT IN (SELECT profile_id FROM swipe_history WHERE user_id= ${user_id}) LIMIT 1`, (err:any, results:any) => {
+        if (err) {
+          console.error("Error fetching profile:", err);
+          res.status(500).json({ error: "Internal server error" });
+          return;
+        }
+
+        if (results.length === 0) {
+            res.status(404).json({ error: "Profile not found" });
+            return;
+        } else {
+            res.json({ profile: results });
+        }
+      });
+      
     } catch (error) {
       console.error('Error fetching profile:', error);
       res.status(500).json({ error: 'Internal Server Error' });
@@ -148,13 +185,20 @@ app.get('/profile/:userId', checkDailyLimit, async (req: Request, res: Response)
   });
 
 // API endpoint to swipe left (pass) on a profile
-app.post('/api/swipe/left/:userId', verifyToken, checkDailyLimit, async (req, res) => {
-    const { user_id } = req.params;
+app.post('/api/swipe/left', verifyToken, checkDailyLimit, async (req, res) => {
+    const { user_id, profile_id } = req.query;
     
     try {
       // Logic to record the left swipe in the database
-      await dbConnection.query('INSERT INTO swipe_history (user_id, action, swipe_date) VALUES ($1, $2, CURRENT_DATE)', [user_id, 'pass']);
-      res.json({ message: 'Swipe left successful' });
+      await dbConnection.query(`INSERT INTO swipe_history (user_id, profile_id, action, swipe_date) VALUES (${user_id}, ${profile_id}, 'pass', CURRENT_DATE())`, (err:any, results:any) => {
+        if (err) {
+          console.error("Error insert history:", err);
+          res.status(500).json({ error: "Internal server error" });
+          return;
+        }
+        res.json({ message: 'Swipe left successful' });
+      });
+      
     } catch (error) {
       console.error('Error recording left swipe:', error);
       res.status(500).json({ error: 'Internal Server Error' });
@@ -162,13 +206,19 @@ app.post('/api/swipe/left/:userId', verifyToken, checkDailyLimit, async (req, re
 });
   
 // API endpoint to swipe right (like) on a profile
-app.post('/api/swipe/right/:userId', verifyToken, checkDailyLimit, async (req, res) => {
-const { user_id } = req.params;
+app.post('/api/swipe/right', verifyToken, checkDailyLimit, async (req, res) => {
+const { user_id, profile_id } = req.query;
 
 try {
     // Logic to record the right swipe in the database
-    await dbConnection.query('INSERT INTO swipe_history (user_id, action, swipe_date) VALUES ($1, $2, CURRENT_DATE)', [user_id, 'like']);
-    res.json({ message: 'Swipe right successful' });
+    await dbConnection.query(`INSERT INTO swipe_history (user_id, profile_id, action, swipe_date) VALUES (${user_id}, ${profile_id}, 'like', CURRENT_DATE())`, (err:any, results:any) => {
+        if (err) {
+          console.error("Error insert history:", err);
+          res.status(500).json({ error: "Internal server error" });
+          return;
+        }
+        res.json({ message: 'Swipe right successful' });
+      });
 } catch (error) {
     console.error('Error recording right swipe:', error);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -176,12 +226,18 @@ try {
 });
 
 // API endpoint to update user type
-app.put('/api/user/:userId', verifyToken, async (req, res) => {
+app.put('/api/user', verifyToken, async (req, res) => {
     const { user_id, type } = req.body;
     try {
       // Logic to update user type
-      await dbConnection.query('UPDATE users SET type = $1 WHERE user_id = $2', [type, user_id]);
-      res.json({ message: 'User type updated successfully' });
+      await dbConnection.query(`UPDATE users SET type = '${type}' WHERE id = ${user_id}`, (err:any, results:any) => {
+        if (err) {
+          console.error("Error update user:", err);
+          res.status(500).json({ error: "Internal server error" });
+          return;
+        }
+        res.json({ message: 'User type updated successfully' });
+      });
     } catch (error) {
       console.error('Error updating user type:', error);
       res.status(500).json({ error: 'Internal Server Error' });
